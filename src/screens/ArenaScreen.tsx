@@ -38,9 +38,11 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
   
   const [arenaStep, setArenaStep] = useState<ArenaStep>('settings');
   const [searchQuery, setSearchQuery] = useState('');
-  const [mode, setMode] = useState<'single' | 'all'>('all');
+  const [mode, setMode] = useState<'single' | 'all' | 'mixed'>('all');
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
+  const [selectedSongs, setSelectedSongs] = useState<Song[]>([]);
   const [wordCount, setWordCount] = useState(5);
+  const [customWordCount, setCustomWordCount] = useState('');
   const [challengeMode, setChallengeMode] = useState<ChallengeMode>('fill');
   
   const [challenges, setChallenges] = useState<Challenge[]>([]);
@@ -72,9 +74,14 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
       const songSources = sources.filter(s => s.songTitle === selectedSong.title);
       const wordIds = [...new Set(songSources.map(s => s.wordId))];
       filtered = filtered.filter(w => wordIds.includes(w.id));
+    } else if (mode === 'mixed' && selectedSongs.length > 0) {
+      const songTitles = selectedSongs.map(s => s.title);
+      const songSources = sources.filter(s => songTitles.includes(s.songTitle));
+      const wordIds = [...new Set(songSources.map(s => s.wordId))];
+      filtered = filtered.filter(w => wordIds.includes(w.id));
     }
     return filtered;
-  }, [mode, selectedSong, words, sources]);
+  }, [mode, selectedSong, selectedSongs, words, sources]);
 
   const goToSongSelect = () => {
     if (mode === 'all') {
@@ -90,8 +97,9 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
       return;
     }
 
+    const count = customWordCount ? parseInt(customWordCount, 10) : wordCount;
     const shuffled = [...availableWords].sort(() => Math.random() - 0.5);
-    const selectedWords = shuffled.slice(0, Math.min(wordCount, shuffled.length));
+    const selectedWords = shuffled.slice(0, Math.min(count, shuffled.length));
     
     const newChallenges: Challenge[] = selectedWords.map(word => {
       const wordSources = sources.filter(s => s.wordId === word.id);
@@ -310,19 +318,35 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📊 Word Count: {wordCount}</Text>
+          <Text style={styles.sectionTitle}>📊 Word Count: {customWordCount || wordCount}</Text>
           <View style={styles.countRow}>
             {[5, 10, 15, 20].map(count => (
               <TouchableOpacity
                 key={count}
-                style={[styles.countButton, wordCount === count && styles.countButtonActive]}
-                onPress={() => setWordCount(count)}
+                style={[styles.countButton, wordCount === count && !customWordCount && styles.countButtonActive]}
+                onPress={() => { setWordCount(count); setCustomWordCount(''); }}
               >
-                <Text style={[styles.countButtonText, wordCount === count && styles.countButtonTextActive]}>
+                <Text style={[styles.countButtonText, wordCount === count && !customWordCount && styles.countButtonTextActive]}>
                   {count}
                 </Text>
               </TouchableOpacity>
             ))}
+            <TextInput
+              style={[styles.customCountInput, customWordCount && styles.customCountInputActive]}
+              placeholder="Custom"
+              placeholderTextColor={COLORS.textMuted}
+              value={customWordCount}
+              onChangeText={(text) => {
+                const num = parseInt(text, 10);
+                if (!isNaN(num) && num > 0) {
+                  setCustomWordCount(text);
+                  setWordCount(Math.min(num, availableWords.length));
+                } else if (text === '') {
+                  setCustomWordCount('');
+                }
+              }}
+              keyboardType="number-pad"
+            />
           </View>
         </View>
 
@@ -343,6 +367,14 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
             >
               <Text style={[styles.modeButtonText, mode === 'all' && styles.modeButtonTextActive]}>
                 All Songs
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeButton, mode === 'mixed' && styles.modeButtonActive]}
+              onPress={() => { setMode('mixed'); setSelectedSong(null); }}
+            >
+              <Text style={[styles.modeButtonText, mode === 'mixed' && styles.modeButtonTextActive]}>
+                Mixed Songs
               </Text>
             </TouchableOpacity>
           </View>
@@ -374,8 +406,10 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.title}>Select Song</Text>
-        <Text style={styles.subtitle}>Choose a song to practice</Text>
+        <Text style={styles.title}>{mode === 'mixed' ? 'Select Songs' : 'Select Song'}</Text>
+        <Text style={styles.subtitle}>
+          {mode === 'mixed' ? 'Choose songs to mix (select multiple)' : 'Choose a song to practice'}
+        </Text>
 
         {mode === 'single' && (
           <View style={styles.section}>
@@ -389,21 +423,39 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
           </View>
         )}
 
+        {mode === 'mixed' && (
+          <View style={styles.infoRow}>
+            <Text style={styles.infoText}>
+              Selected: {selectedSongs.length} songs | Available: {availableWords.length} words
+            </Text>
+          </View>
+        )}
+
         <View style={styles.songGrid}>
           {availableSongs.map(song => {
             const songSources = sources.filter(src => src.songTitle === song.title);
             const wordCount = [...new Set(songSources.map(s => s.wordId))].length;
+            const isSelected = mode === 'mixed' ? selectedSongs.some(s => s.id === song.id) : selectedSong?.id === song.id;
             
             return (
               <TouchableOpacity
                 key={song.id}
-                style={[styles.songCard, selectedSong?.id === song.id && styles.songCardSelected]}
+                style={[styles.songCard, isSelected && styles.songCardSelected]}
                 onPress={() => {
                   if (mode === 'single') {
                     setSelectedSong(song);
+                  } else if (mode === 'mixed') {
+                    if (selectedSongs.some(s => s.id === song.id)) {
+                      setSelectedSongs(selectedSongs.filter(s => s.id !== song.id));
+                    } else {
+                      setSelectedSongs([...selectedSongs, song]);
+                    }
                   }
                 }}
               >
+                {mode === 'mixed' && (
+                  <Text style={styles.songCardCheck}>{isSelected ? '☑️' : '⬜'}</Text>
+                )}
                 <Text style={styles.songCardTitle}>{song.title}</Text>
                 <Text style={styles.songCardCount}>{wordCount} words</Text>
               </TouchableOpacity>
@@ -418,11 +470,15 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
         <TouchableOpacity
           style={[
             styles.startButton,
-            mode === 'single' && !selectedSong && styles.startButtonDisabled
+            (mode === 'single' && !selectedSong) || (mode === 'mixed' && selectedSongs.length === 0) && styles.startButtonDisabled
           ]}
           onPress={() => {
             if (mode === 'single' && !selectedSong) {
               Alert.alert('Please select a song first');
+              return;
+            }
+            if (mode === 'mixed' && selectedSongs.length === 0) {
+              Alert.alert('Please select at least one song');
               return;
             }
             startChallenge();
@@ -701,6 +757,20 @@ const styles = StyleSheet.create({
   countButtonTextActive: {
     color: COLORS.text,
   },
+  customCountInput: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 10,
+    padding: 10,
+    fontSize: 14,
+    color: COLORS.text,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    width: 70,
+    textAlign: 'center',
+  },
+  customCountInputActive: {
+    borderColor: COLORS.primary,
+  },
   searchInput: {
     backgroundColor: COLORS.surface,
     borderRadius: 10,
@@ -747,6 +817,10 @@ const styles = StyleSheet.create({
   songCardSelected: {
     borderWidth: 2,
     borderColor: COLORS.primary,
+  },
+  songCardCheck: {
+    fontSize: 18,
+    marginBottom: 4,
   },
   songCardTitle: {
     color: COLORS.text,
