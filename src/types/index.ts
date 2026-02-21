@@ -71,24 +71,28 @@ export interface ProcessResult {
   }>;
 }
 
-export type ApiProvider = 'gemini' | 'nvidia';
+export type ApiProvider = 'gemini' | 'nvidia' | 'opencode';
 export type AIStyle = 'lyric' | 'poetic' | 'academic' | 'casual';
 
 export interface UserSettings {
   apiProvider: ApiProvider;
   nvidiaApiKey: string;
   geminiApiKey: string;
+  opencodeApiKey: string;
   nvidiaModel: string;
   geminiModel: string;
+  opencodeModel: string;
   aiStyle: AIStyle;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   apiProvider: 'gemini',
   nvidiaApiKey: '',
-  geminiApiKey: '', // 用户需要自己配置 API Key
-  nvidiaModel: 'z-ai/glm5',
+  geminiApiKey: '',
+  opencodeApiKey: '',
+  nvidiaModel: 'moonshotai/kimi-k2.5',
   geminiModel: 'gemini-2.5-flash-lite',
+  opencodeModel: 'big-pickle',
   aiStyle: 'lyric',
 };
 
@@ -100,7 +104,17 @@ export const GEMINI_MODELS = [
 ];
 
 export const NVIDIA_MODELS = [
-  'z-ai/glm5',
-  'nvidia/llama-3.1-nemotron-70b-instruct',
-  'deepseek-ai/DeepSeek-V3',
+  'moonshotai/kimi-k2.5',
+  'deepseek-ai/deepseek-v3.2',
+  'qwen/qwen3.5-397b-a17b',
+  'minimaxai/minimax-m2.1',
+];
+
+export const OPENCODE_MODELS = [
+  'big-pickle',
+  'glm-4.7-free',
+  'kimi-k2.5-free',
+  'minimax-m2.1-free',
+  'grok-code-fast-1',
+  'gpt-5-nano',
 ];

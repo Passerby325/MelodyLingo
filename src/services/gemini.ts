@@ -1,6 +1,5 @@
-import OpenAI from 'openai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { UserSettings, AIStyle } from '../types';
+import { callAI } from './aiClient';
 
 const STYLE_PROMPTS: Record<AIStyle, string> = {
   lyric: 'Translate the Chinese lyrics into English in a SONG LYRICS style - simple, natural, easy to understand. Use common B1-C1 level vocabulary. PRIORITY: Accuracy first, then simplicity. Avoid rare, archaic, or overly literary words. Use everyday English words that most learners would know.',
@@ -57,23 +56,12 @@ Return JSON in this exact format:
 ]`;
 };
 
-const createNvidiaClient = (apiKey: string) => {
-  return new OpenAI({
-    baseURL: 'https://integrate.api.nvidia.com/v1',
-    apiKey: apiKey,
-  });
-};
-
-const createGeminiClient = (apiKey: string) => {
-  return new GoogleGenerativeAI(apiKey);
-};
-
 export const extractVocabulary = async (
   lyrics: string,
   songTitle: string,
   blacklist: string[] = [],
   settings?: UserSettings
-): Promise<{ words: Array<{ word: string; meaning: string; level: string; example: string; exampleZh: string; sentence: string; sentenceEn: string; replaceWord: string }> }> => {
+): Promise<{ words: Array<{ word: string; meaning: string; level: string; example: string; exampleZh: string; sentence: string; sentenceEn: string; replaceWord: string }>; error?: string }> => {
   try {
     const aiStyle = settings?.aiStyle || 'lyric';
     const systemPrompt = getSystemPrompt(aiStyle);
@@ -88,53 +76,20 @@ ${lyrics}
 
 ${blacklistText}`;
 
-    if (!settings || settings.apiProvider === 'gemini') {
-      const apiKey = settings?.geminiApiKey || '';
-      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+    const { text, error } = await callAI(prompt, settings, { temperature: 1, maxTokens: 16384 });
 
-      const genAI = createGeminiClient(apiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
-
-      const jsonMatch = response.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.log('Raw response:', response);
-        return { words: [] };
-      }
-
-      const words = JSON.parse(jsonMatch[0]);
-      return { words: Array.isArray(words) ? words : [] };
-    } else {
-      const apiKey = settings.nvidiaApiKey;
-      const modelName = settings.nvidiaModel || 'z-ai/glm5';
-
-      if (!apiKey) {
-        console.error('NVIDIA API key is missing');
-        return { words: [] };
-      }
-
-      const client = createNvidiaClient(apiKey);
-
-      const completion = await client.chat.completions.create({
-        model: modelName,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 1,
-        max_tokens: 16384,
-      });
-
-      const response = completion.choices[0]?.message?.content || '';
-
-      const jsonMatch = response.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.log('Raw response:', response);
-        return { words: [] };
-      }
-
-      const words = JSON.parse(jsonMatch[0]);
-      return { words: Array.isArray(words) ? words : [] };
+    if (error || !text) {
+      return { words: [], error };
     }
+
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      console.log('Raw response:', text);
+      return { words: [] };
+    }
+
+    const words = JSON.parse(jsonMatch[0]);
+    return { words: Array.isArray(words) ? words : [] };
   } catch (error: any) {
     console.error('AI API error:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
@@ -146,7 +101,7 @@ export const translateLyrics = async (
   lyrics: string,
   style: AIStyle = 'lyric',
   settings?: UserSettings
-): Promise<string> => {
+): Promise<{ text: string; error?: string } | string> => {
   const styleTranslation = STYLE_PROMPTS[style];
   try {
     const prompt = `Translate the following song lyrics into accurate English. 
@@ -165,39 +120,17 @@ ${lyrics}
 
 Translate each line/sentence accurately into English:`;
 
-    if (!settings || settings.apiProvider === 'gemini') {
-      const apiKey = settings?.geminiApiKey || '';
-      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+    const { text, error } = await callAI(prompt, settings, { temperature: 0.3, maxTokens: 4096 });
 
-      const genAI = createGeminiClient(apiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      const result = await model.generateContent(prompt);
-      return result.response.text();
-    } else {
-      const apiKey = settings.nvidiaApiKey;
-      const modelName = settings.nvidiaModel || 'z-ai/glm5';
-
-      if (!apiKey) {
-        console.error('NVIDIA API key is missing');
-        return '';
-      }
-
-      const client = createNvidiaClient(apiKey);
-
-      const completion = await client.chat.completions.create({
-        model: modelName,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 4096,
-      });
-
-      return completion.choices[0]?.message?.content || '';
+    if (error) {
+      return { text: '', error };
     }
+
+    return { text };
   } catch (error: any) {
     console.error('Translation error:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
-    return { error: `API请求失败: ${errorMessage}` };
+    return { text: '', error: `API请求失败: ${errorMessage}` };
   }
 };
 
@@ -205,6 +138,7 @@ export interface AnswerEvaluation {
   isCorrect: boolean;
   score: number;
   feedback: string;
+  error?: string;
 }
 
 export const evaluateAnswer = async (
@@ -233,48 +167,18 @@ Evaluate based on:
 Respond with ONLY a JSON object in this exact format:
 {"isCorrect": true/false, "score": 0-100, "feedback": "Brief explanation in Chinese"}`;
 
-    if (!settings || settings.apiProvider === 'gemini') {
-      const apiKey = settings?.geminiApiKey || '';
-      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+    const { text, error } = await callAI(prompt, settings, { temperature: 0.3, maxTokens: 512 });
 
-      const genAI = createGeminiClient(apiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { isCorrect: false, score: 0, feedback: '无法评估答案' };
-      }
-
-      return JSON.parse(jsonMatch[0]);
-    } else {
-      const apiKey = settings.nvidiaApiKey;
-      const modelName = settings.nvidiaModel || 'z-ai/glm5';
-
-      if (!apiKey) {
-        return { isCorrect: false, score: 0, feedback: 'API key missing' };
-      }
-
-      const client = createNvidiaClient(apiKey);
-
-      const completion = await client.chat.completions.create({
-        model: modelName,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 512,
-      });
-
-      const response = completion.choices[0]?.message?.content || '';
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { isCorrect: false, score: 0, feedback: '无法评估答案' };
-      }
-
-      return JSON.parse(jsonMatch[0]);
+    if (error) {
+      return { isCorrect: false, score: 0, feedback: error };
     }
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { isCorrect: false, score: 0, feedback: '无法评估答案' };
+    }
+
+    return JSON.parse(jsonMatch[0]);
   } catch (error: any) {
     console.error('Answer evaluation error:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
@@ -286,6 +190,7 @@ export interface PracticeSentence {
   sentence: string;
   sentenceZh: string;
   options: string[];
+  error?: string;
 }
 
 export const generatePracticeSentence = async (
@@ -312,51 +217,20 @@ Requirements:
 Return ONLY valid JSON in this format:
 {"sentence": "Complete English sentence", "sentenceZh": "Chinese translation"}`;
 
-    if (!settings || settings.apiProvider === 'gemini') {
-      const apiKey = settings?.geminiApiKey || '';
-      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+    const { text, error } = await callAI(prompt, settings, { temperature: 0.7, maxTokens: 512 });
 
-      const genAI = createGeminiClient(apiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { sentence: '____', sentenceZh: meaning, options };
-      }
-
-      const data = JSON.parse(jsonMatch[0]);
-      return { ...data, options };
-    } else {
-      const apiKey = settings.nvidiaApiKey;
-      const modelName = settings.nvidiaModel || 'z-ai/glm5';
-
-      if (!apiKey) {
-        return { sentence: '____', sentenceZh: meaning, options };
-      }
-
-      const client = createNvidiaClient(apiKey);
-
-      const completion = await client.chat.completions.create({
-        model: modelName,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 512,
-      });
-
-      const response = completion.choices[0]?.message?.content || '';
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { sentence: '____', sentenceZh: meaning, options };
-      }
-
-      const data = JSON.parse(jsonMatch[0]);
-      return { ...data, options };
+    if (error) {
+      return { sentence: '____', sentenceZh: meaning, options, error };
     }
-    } catch (error: any) {
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { sentence: '____', sentenceZh: meaning, options };
+    }
+
+    const data = JSON.parse(jsonMatch[0]);
+    return { ...data, options };
+  } catch (error: any) {
     console.error('Generate practice sentence error:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
     return { sentence: '____', sentenceZh: meaning, options: [], error: `API请求失败: ${errorMessage}` };
@@ -366,6 +240,7 @@ Return ONLY valid JSON in this format:
 export interface TranslateQuestion {
   word: string;
   sentenceZh: string;
+  error?: string;
 }
 
 export const generateTranslateQuestion = async (
@@ -384,49 +259,19 @@ Requirements:
 Return ONLY valid JSON in this format:
 {"word": "${word}", "sentenceZh": "中文句子"}`;
 
-    if (!settings || settings.apiProvider === 'gemini') {
-      const apiKey = settings?.geminiApiKey || '';
-      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+    const { text, error } = await callAI(prompt, settings, { temperature: 0.7, maxTokens: 512 });
 
-      const genAI = createGeminiClient(apiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { word, sentenceZh: meaning };
-      }
-
-      const parsed = JSON.parse(jsonMatch[0]);
-      return { word, sentenceZh: parsed.sentenceZh || parsed.sentence || meaning };
-    } else {
-      const apiKey = settings.nvidiaApiKey;
-      const modelName = settings.nvidiaModel || 'z-ai/glm5';
-
-      if (!apiKey) {
-        return { word, sentenceZh: meaning };
-      }
-
-      const client = createNvidiaClient(apiKey);
-
-      const completion = await client.chat.completions.create({
-        model: modelName,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 512,
-      });
-
-      const response = completion.choices[0]?.message?.content || '';
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return { word, sentenceZh: meaning };
-      }
-
-      return JSON.parse(jsonMatch[0]);
+    if (error) {
+      return { word, sentenceZh: meaning, error };
     }
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { word, sentenceZh: meaning };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    return { word, sentenceZh: parsed.sentenceZh || parsed.sentence || meaning };
   } catch (error: any) {
     console.error('Generate translate question error:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error';
@@ -438,7 +283,7 @@ export const evaluateTranslation = async (
   userAnswer: string,
   sentenceZh: string,
   settings?: UserSettings
-): Promise<{ isCorrect: boolean; score: number; correctAnswer: string; feedback: string }> => {
+): Promise<{ isCorrect: boolean; score: number; correctAnswer: string; feedback: string; error?: string }> => {
   try {
     const prompt = `Evaluate if the user's English translation is correct for the Chinese sentence: "${sentenceZh}"
 
@@ -454,40 +299,14 @@ Your answer: "[user's answer]"
 Correct: "[correct full translation]"
 Reason: [具体原因]`;
 
-    if (!settings || settings.apiProvider === 'gemini') {
-      const apiKey = settings?.geminiApiKey || '';
-      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+    const { text, error } = await callAI(prompt, settings, { temperature: 0.3, maxTokens: 512 });
 
-      const genAI = createGeminiClient(apiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      const result = await model.generateContent(prompt);
-      const response = result.response.text();
-
-      const parsed = parseTranslationResponse(response, userAnswer);
-      return parsed;
-    } else {
-      const apiKey = settings.nvidiaApiKey;
-      const modelName = settings.nvidiaModel || 'z-ai/glm5';
-
-      if (!apiKey) {
-        return { isCorrect: false, score: 0, correctAnswer: '', feedback: 'NVIDIA API key is missing' };
-      }
-
-      const client = createNvidiaClient(apiKey);
-
-      const completion = await client.chat.completions.create({
-        model: modelName,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 512,
-      });
-
-      const response = completion.choices[0]?.message?.content || '';
-
-      const parsed = parseTranslationResponse(response, userAnswer);
-      return parsed;
+    if (error) {
+      return { isCorrect: false, score: 0, correctAnswer: '', feedback: error };
     }
+
+    const parsed = parseTranslationResponse(text, userAnswer);
+    return parsed;
   } catch (error: any) {
     console.error('Translation evaluation error:', error);
     const errorMessage = error?.message || error?.toString() || 'Unknown error';

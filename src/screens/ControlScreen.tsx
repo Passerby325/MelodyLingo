@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { COLORS } from '../constants';
 import { useAppStore } from '../store';
-import { ApiProvider, GEMINI_MODELS, NVIDIA_MODELS } from '../types';
+import { ApiProvider, GEMINI_MODELS, NVIDIA_MODELS, OPENCODE_MODELS } from '../types';
 
 interface ControlScreenProps {
   navigation: any;
@@ -21,9 +21,12 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
   const [newBlacklistWord, setNewBlacklistWord] = useState('');
   const [tempGeminiKey, setTempGeminiKey] = useState(settings.geminiApiKey);
   const [tempNvidiaKey, setTempNvidiaKey] = useState(settings.nvidiaApiKey);
+  const [tempOpenCodeKey, setTempOpenCodeKey] = useState(settings.opencodeApiKey);
   const [selectedProvider, setSelectedProvider] = useState<ApiProvider>(settings.apiProvider);
   const [selectedGeminiModel, setSelectedGeminiModel] = useState(settings.geminiModel);
   const [selectedNvidiaModel, setSelectedNvidiaModel] = useState(settings.nvidiaModel);
+  const [selectedOpenCodeModel, setSelectedOpenCodeModel] = useState(settings.opencodeModel);
+  const [customModel, setCustomModel] = useState('');
   const [selectedStyle, setSelectedStyle] = useState(settings.aiStyle);
   const [quotaStatus, setQuotaStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [quotaError, setQuotaError] = useState('');
@@ -31,9 +34,11 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
   useEffect(() => {
     setTempGeminiKey(settings.geminiApiKey);
     setTempNvidiaKey(settings.nvidiaApiKey);
+    setTempOpenCodeKey(settings.opencodeApiKey);
     setSelectedProvider(settings.apiProvider);
     setSelectedGeminiModel(settings.geminiModel);
     setSelectedNvidiaModel(settings.nvidiaModel);
+    setSelectedOpenCodeModel(settings.opencodeModel);
     setSelectedStyle(settings.aiStyle);
   }, [settings]);
 
@@ -54,7 +59,7 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
           setQuotaStatus('error');
           setQuotaError('No response from API');
         }
-      } else {
+      } else if (selectedProvider === 'nvidia') {
         const { default: OpenAI } = await import('openai');
         const client = new OpenAI({
           baseURL: 'https://integrate.api.nvidia.com/v1',
@@ -63,6 +68,25 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
         
         const completion = await client.chat.completions.create({
           model: selectedNvidiaModel,
+          messages: [{ role: 'user', content: 'test' }],
+          max_tokens: 1,
+        });
+        
+        if (completion.choices[0]) {
+          setQuotaStatus('ok');
+        } else {
+          setQuotaStatus('error');
+          setQuotaError('No response from API');
+        }
+      } else if (selectedProvider === 'opencode') {
+        const { default: OpenAI } = await import('openai');
+        const client = new OpenAI({
+          baseURL: 'https://opencode.ai/zen/v1',
+          apiKey: tempOpenCodeKey,
+        });
+        
+        const completion = await client.chat.completions.create({
+          model: selectedOpenCodeModel,
           messages: [{ role: 'user', content: 'test' }],
           max_tokens: 1,
         });
@@ -111,8 +135,10 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
       apiProvider: selectedProvider,
       geminiApiKey: tempGeminiKey,
       nvidiaApiKey: tempNvidiaKey,
+      opencodeApiKey: tempOpenCodeKey,
       geminiModel: selectedGeminiModel,
       nvidiaModel: selectedNvidiaModel,
+      opencodeModel: selectedOpenCodeModel,
       aiStyle: selectedStyle,
     });
     Alert.alert('Success', 'Settings saved!');
@@ -121,9 +147,20 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
   const masteredCount = words.filter((w) => w.isMastered).length;
   const totalCount = words.length;
 
-  const currentModels = selectedProvider === 'gemini' ? GEMINI_MODELS : NVIDIA_MODELS;
-  const currentModel = selectedProvider === 'gemini' ? selectedGeminiModel : selectedNvidiaModel;
-  const setCurrentModel = selectedProvider === 'gemini' ? setSelectedGeminiModel : setSelectedNvidiaModel;
+  const getCurrentModels = () => {
+    if (selectedProvider === 'gemini') return GEMINI_MODELS;
+    if (selectedProvider === 'nvidia') return NVIDIA_MODELS;
+    return OPENCODE_MODELS;
+  };
+  
+  const currentModels = getCurrentModels();
+  const currentModel = customModel || (selectedProvider === 'gemini' ? selectedGeminiModel : selectedProvider === 'nvidia' ? selectedNvidiaModel : selectedOpenCodeModel);
+  const setCurrentModel = (model: string) => {
+    if (selectedProvider === 'gemini') setSelectedGeminiModel(model);
+    else if (selectedProvider === 'nvidia') setSelectedNvidiaModel(model);
+    else setSelectedOpenCodeModel(model);
+  };
+  const isCustomModel = !!customModel;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -166,12 +203,20 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
             onPress={() => setSelectedProvider('nvidia')}
           >
             <Text style={[styles.providerText, selectedProvider === 'nvidia' && styles.providerTextActive]}>
-              NVIDIA API
+              NVIDIA
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.providerButton, selectedProvider === 'opencode' && styles.providerButtonActive]}
+            onPress={() => setSelectedProvider('opencode')}
+          >
+            <Text style={[styles.providerText, selectedProvider === 'opencode' && styles.providerTextActive]}>
+              OpenCode
             </Text>
           </TouchableOpacity>
         </View>
         <Text style={styles.currentInfo}>
-          Current: {selectedProvider === 'gemini' ? selectedGeminiModel : selectedNvidiaModel}
+          Current: {selectedProvider === 'gemini' ? selectedGeminiModel : selectedProvider === 'nvidia' ? selectedNvidiaModel : selectedOpenCodeModel}
         </Text>
       </View>
 
@@ -191,7 +236,7 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
               Default key pre-configured. Get your own from Google AI Studio
             </Text>
           </View>
-        ) : (
+        ) : selectedProvider === 'nvidia' ? (
           <View style={styles.settingCard}>
             <TextInput
               style={styles.apiInput}
@@ -205,6 +250,20 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
               Get your API key from NVIDIA NGC
             </Text>
           </View>
+        ) : (
+          <View style={styles.settingCard}>
+            <TextInput
+              style={styles.apiInput}
+              value={tempOpenCodeKey}
+              onChangeText={setTempOpenCodeKey}
+              placeholder="Enter OpenCode API key..."
+              placeholderTextColor={COLORS.textMuted}
+              secureTextEntry
+            />
+            <Text style={styles.apiHint}>
+              Get your API key from opencode.ai/zen
+            </Text>
+          </View>
         )}
       </View>
 
@@ -214,14 +273,31 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
           {currentModels.map((model) => (
             <TouchableOpacity
               key={model}
-              style={[styles.modelButton, currentModel === model && styles.modelButtonActive]}
-              onPress={() => setCurrentModel(model)}
+              style={[styles.modelButton, currentModel === model && !isCustomModel && styles.modelButtonActive]}
+              onPress={() => { setCurrentModel(model); setCustomModel(''); }}
             >
-              <Text style={[styles.modelText, currentModel === model && styles.modelTextActive]}>
+              <Text style={[styles.modelText, currentModel === model && !isCustomModel && styles.modelTextActive]}>
                 {model}
               </Text>
             </TouchableOpacity>
           ))}
+        </View>
+        <View style={styles.customModelContainer}>
+          <TextInput
+            style={[styles.apiInput, isCustomModel && styles.apiInputActive]}
+            value={customModel}
+            onChangeText={(text) => {
+              setCustomModel(text);
+              if (text) {
+                setCurrentModel(text);
+              }
+            }}
+            placeholder="Custom model (e.g., provider/model-name)"
+            placeholderTextColor={COLORS.textMuted}
+          />
+          {customModel ? (
+            <Text style={styles.customModelHint}>Using custom model: {customModel}</Text>
+          ) : null}
         </View>
         <TouchableOpacity 
           style={[styles.quotaButton, quotaStatus === 'checking' && styles.quotaButtonDisabled]} 
@@ -457,6 +533,17 @@ const styles = StyleSheet.create({
   apiHint: {
     fontSize: 12,
     color: COLORS.textMuted,
+  },
+  apiInputActive: {
+    borderColor: COLORS.primary,
+  },
+  customModelContainer: {
+    marginTop: 12,
+  },
+  customModelHint: {
+    fontSize: 12,
+    color: COLORS.primary,
+    marginTop: 4,
   },
   modelContainer: {
     flexDirection: 'row',
