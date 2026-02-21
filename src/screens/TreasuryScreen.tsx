@@ -1,22 +1,26 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
+  ScrollView,
   StyleSheet,
   FlatList,
   Modal,
   Alert,
   TextInput,
-  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  ListRenderItem,
 } from 'react-native';
 import { COLORS } from '../constants';
 import { useAppStore } from '../store';
 import { StorageService } from '../services/storage';
 import { Word, Source } from '../types';
-import { generatePracticeSentence, evaluateAnswer } from '../services/gemini';
+import { generatePracticeSentence, evaluateAnswer, generateTranslateQuestion, evaluateTranslation } from '../services/gemini';
 
 type SortMode = 'order' | 'song' | 'created';
+type FilterMode = 'all' | 'learning' | 'mastered';
 type TreasuryStep = 'list' | 'practice';
 
 interface TreasuryScreenProps {
@@ -24,21 +28,35 @@ interface TreasuryScreenProps {
 }
 
 export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) => {
-  const { words, sources, getSourcesForWord, updateWord, settings } = useAppStore();
+  const { words, sources, getSourcesForWord, updateWord, settings, addWrongAnswer } = useAppStore();
+  const flatListRef = useRef<FlatList<Word>>(null);
   const [selectedWord, setSelectedWord] = useState<Word | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [batchMode, setBatchMode] = useState(false);
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>('order');
+  const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [treasuryStep, setTreasuryStep] = useState<TreasuryStep>('list');
-  const [practiceMode, setPracticeMode] = useState<'4choice' | 'fill'>('fill');
+  const [practiceMode, setPracticeMode] = useState<'4choice' | 'fill' | 'translate'>('fill');
   const [practiceWords, setPracticeWords] = useState<Word[]>([]);
   const [practiceIndex, setPracticeIndex] = useState(0);
   const [practiceSentence, setPracticeSentence] = useState<{sentence: string; sentenceZh: string; options: string[]} | null>(null);
+  const [translateQuestion, setTranslateQuestion] = useState<{word: string; sentenceZh: string} | null>(null);
   const [userAnswer, setUserAnswer] = useState('');
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [practiceResult, setPracticeResult] = useState<{isCorrect: boolean; score: number; feedback: string} | null>(null);
   const [practiceScore, setPracticeScore] = useState(0);
+
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  
+  const getWordIndex = (letter: string) => {
+    const index = sortedWords.findIndex(word => 
+      word.word.toUpperCase().startsWith(letter)
+    );
+    if (index !== -1) {
+      flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
+    }
+  };
 
   const toggleSelectWord = (wordId: string) => {
     if (selectedWords.includes(wordId)) {
@@ -50,6 +68,13 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
 
   const sortedWords = useMemo(() => {
     let sorted = [...words];
+    
+    if (filterMode === 'mastered') {
+      sorted = sorted.filter(w => w.isMastered);
+    } else if (filterMode === 'learning') {
+      sorted = sorted.filter(w => !w.isMastered);
+    }
+    
     if (sortMode === 'order') {
       sorted = sorted.sort((a, b) => a.word.localeCompare(b.word));
     } else if (sortMode === 'created') {
@@ -64,21 +89,43 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
       });
     }
     return sorted;
-  }, [words, sources, sortMode]);
+  }, [words, sources, sortMode, filterMode]);
 
-  const startPractice = (mode: '4choice' | 'fill') => {
-    if (words.length < 4) {
+  const startPractice = (mode: '4choice' | 'fill' | 'translate') => {
+    let availableWords = [...words];
+    
+    if (filterMode === 'mastered') {
+      availableWords = availableWords.filter(w => w.isMastered);
+    } else if (filterMode === 'learning') {
+      availableWords = availableWords.filter(w => !w.isMastered);
+    }
+    
+    if (availableWords.length < 4) {
       Alert.alert('Not enough words', 'Need at least 4 words to practice');
       return;
     }
     setPracticeMode(mode);
-    const shuffled = [...words].sort(() => Math.random() - 0.5);
+    const shuffled = [...availableWords].sort(() => Math.random() - 0.5);
     setPracticeWords(shuffled);
     setPracticeIndex(0);
     setPracticeScore(0);
     setPracticeResult(null);
     setTreasuryStep('practice');
-    loadPracticeSentence(shuffled[0], shuffled);
+    
+    if (mode === 'translate') {
+      loadTranslateQuestion(shuffled[0]);
+    } else {
+      loadPracticeSentence(shuffled[0], shuffled);
+    }
+  };
+
+  const loadTranslateQuestion = async (word: Word) => {
+    setTranslateQuestion(null);
+    setUserAnswer('');
+    setPracticeResult(null);
+    
+    const result = await generateTranslateQuestion(word.word, word.meaning, settings);
+    setTranslateQuestion(result);
   };
 
   const loadPracticeSentence = async (word: Word, allWords: Word[]) => {
@@ -92,14 +139,43 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
   };
 
   const submitPracticeAnswer = async () => {
-    if (!practiceSentence || !userAnswer.trim()) return;
+    if ((!practiceSentence && practiceMode !== 'translate') || !userAnswer.trim()) return;
     
     const currentWord = practiceWords[practiceIndex];
     setIsEvaluating(true);
     
     try {
-      if (practiceMode === 'fill') {
-        const result = await evaluateAnswer(
+      let result: { isCorrect: boolean; score: number; feedback: string };
+      
+      if (practiceMode === 'translate' && translateQuestion) {
+        result = await evaluateTranslation(
+          userAnswer.trim(),
+          translateQuestion.word,
+          translateQuestion.sentenceZh,
+          settings
+        );
+        setPracticeResult(result);
+        if (result.isCorrect || result.score >= 70) {
+          setPracticeScore(practiceScore + 1);
+        } else {
+          addWrongAnswer({
+            id: Date.now().toString() + Math.random(),
+            wordId: currentWord.id,
+            word: currentWord.word,
+            meaning: currentWord.meaning,
+            userAnswer: userAnswer.trim(),
+            correctAnswer: translateQuestion.word,
+            sentence: translateQuestion.sentenceZh,
+            sentenceEn: '',
+            score: result.score,
+            feedback: result.feedback,
+            songTitle: '',
+            createdAt: Date.now(),
+            errorType: 'translate',
+          });
+        }
+      } else if (practiceMode === 'fill') {
+        result = await evaluateAnswer(
           userAnswer.trim(),
           currentWord.word,
           practiceSentence.sentence,
@@ -110,16 +186,49 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
         setPracticeResult(result);
         if (result.isCorrect || result.score >= 70) {
           setPracticeScore(practiceScore + 1);
+        } else {
+          addWrongAnswer({
+            id: Date.now().toString() + Math.random(),
+            wordId: currentWord.id,
+            word: currentWord.word,
+            meaning: currentWord.meaning,
+            userAnswer: userAnswer.trim(),
+            correctAnswer: currentWord.word,
+            sentence: practiceSentence.sentence,
+            sentenceEn: practiceSentence.sentenceZh,
+            score: result.score,
+            feedback: result.feedback,
+            songTitle: '',
+            createdAt: Date.now(),
+            errorType: 'fill',
+          });
         }
       } else {
         const isCorrect = userAnswer.trim().toLowerCase() === currentWord.word.toLowerCase();
-        setPracticeResult({
+        result = {
           isCorrect,
           score: isCorrect ? 100 : 0,
           feedback: isCorrect ? 'Correct!' : `The answer is "${currentWord.word}"`
-        });
+        };
+        setPracticeResult(result);
         if (isCorrect) {
           setPracticeScore(practiceScore + 1);
+        } else {
+          addWrongAnswer({
+            id: Date.now().toString() + Math.random(),
+            wordId: currentWord.id,
+            word: currentWord.word,
+            meaning: currentWord.meaning,
+            userAnswer: userAnswer.trim(),
+            correctAnswer: currentWord.word,
+            sentence: practiceSentence?.sentence || '',
+            sentenceEn: practiceSentence?.sentenceZh || '',
+            score: 0,
+            feedback: 'Wrong answer',
+            songTitle: '',
+            createdAt: Date.now(),
+            errorType: '4choice',
+          });
         }
       }
     } catch (error) {
@@ -139,7 +248,11 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
     if (practiceIndex < practiceWords.length - 1) {
       const nextIdx = practiceIndex + 1;
       setPracticeIndex(nextIdx);
-      loadPracticeSentence(practiceWords[nextIdx], practiceWords);
+      if (practiceMode === 'translate') {
+        loadTranslateQuestion(practiceWords[nextIdx]);
+      } else {
+        loadPracticeSentence(practiceWords[nextIdx], practiceWords);
+      }
     } else {
       Alert.alert(
         'Practice Complete!',
@@ -197,6 +310,36 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
       updateWord(selectedWord.id, { isMastered: !selectedWord.isMastered });
       setSelectedWord({ ...selectedWord, isMastered: !selectedWord.isMastered });
     }
+  };
+
+  const toggleMasteredForWord = (wordId: string) => {
+    const word = words.find(w => w.id === wordId);
+    if (word) {
+      updateWord(wordId, { isMastered: !word.isMastered });
+    }
+  };
+
+  const confirmDeleteWord = (wordId: string) => {
+    const word = words.find(w => w.id === wordId);
+    if (!word) return;
+
+    Alert.alert(
+      'Delete Word',
+      `Are you sure you want to delete "${word.word}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const updatedWords = words.filter((w) => w.id !== wordId);
+            deleteWord(wordId);
+            const updatedSources = sources.filter((s) => s.wordId !== wordId);
+            setSources(updatedSources);
+          },
+        },
+      ]
+    );
   };
 
   const handleDeleteWord = () => {
@@ -268,14 +411,18 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
     const currentWord = practiceWords[practiceIndex];
     
     return (
-      <View style={styles.container}>
+      <KeyboardAvoidingView 
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={100}
+      >
         <View style={styles.header}>
           <TouchableOpacity onPress={() => setTreasuryStep('list')} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Exit</Text>
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.practiceContainer} contentContainerStyle={styles.practiceContent}>
+        <ScrollView style={styles.practiceContainer} contentContainerStyle={styles.practiceContent} keyboardShouldPersistTaps="handled">
           <View style={styles.practiceProgress}>
             <Text style={styles.practiceProgressText}>
               {practiceIndex + 1} / {practiceWords.length} | Score: {practiceScore}
@@ -343,6 +490,31 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
               </>
             )}
 
+            {practiceMode === 'translate' && translateQuestion && (
+              <>
+                <View style={styles.sentenceContainer}>
+                  <Text style={styles.sentenceLabel}>Translate to English:</Text>
+                  <Text style={styles.sentenceText}>
+                    "{translateQuestion.sentenceZh}"
+                  </Text>
+                  <Text style={styles.sentenceZhText}>
+                    Hint: The word is "{translateQuestion.word}"
+                  </Text>
+                </View>
+
+                <TextInput
+                  style={styles.fillInput}
+                  value={userAnswer}
+                  onChangeText={setUserAnswer}
+                  placeholder="Type English translation..."
+                  placeholderTextColor={COLORS.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!practiceResult}
+                />
+              </>
+            )}
+
             {practiceResult ? (
               <View style={[styles.resultBox, practiceResult.isCorrect || practiceResult.score >= 70 ? styles.resultCorrect : styles.resultWrong]}>
                 <Text style={styles.resultScore}>Score: {practiceResult.score}/100</Text>
@@ -353,7 +525,7 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
                   </Text>
                 </TouchableOpacity>
               </View>
-            ) : practiceMode === 'fill' ? (
+            ) : (practiceMode === 'fill' || practiceMode === 'translate') ? (
               <TouchableOpacity
                 style={[styles.submitButton, (!userAnswer.trim() || isEvaluating) && styles.submitButtonDisabled]}
                 onPress={submitPracticeAnswer}
@@ -366,7 +538,7 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
             ) : null}
           </View>
         </ScrollView>
-      </View>
+        </KeyboardAvoidingView>
     );
   }
 
@@ -406,22 +578,26 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
         </View>
       )}
 
-      {!batchMode && words.length > 0 && (
-        <View style={styles.practiceButtonContainer}>
-          <TouchableOpacity 
-            style={styles.practiceButton4Choice} 
-            onPress={() => startPractice('4choice')}
-          >
-            <Text style={styles.practiceButtonText}>4选1练习</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.practiceButtonFill} 
-            onPress={() => startPractice('fill')}
-          >
-            <Text style={styles.practiceButtonText}>填空练习</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      <View style={styles.sortContainer}>
+        <TouchableOpacity 
+          style={[styles.sortButton, filterMode === 'all' && styles.sortButtonActive]}
+          onPress={() => setFilterMode('all')}
+        >
+          <Text style={[styles.sortButtonText, filterMode === 'all' && styles.sortButtonTextActive]}>All</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.sortButton, filterMode === 'learning' && styles.sortButtonActive]}
+          onPress={() => setFilterMode('learning')}
+        >
+          <Text style={[styles.sortButtonText, filterMode === 'learning' && styles.sortButtonTextActive]}>Studying</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.sortButton, filterMode === 'mastered' && styles.sortButtonActive]}
+          onPress={() => setFilterMode('mastered')}
+        >
+          <Text style={[styles.sortButtonText, filterMode === 'mastered' && styles.sortButtonTextActive]}>Mastered</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.sortContainer}>
         <TouchableOpacity 
@@ -434,13 +610,13 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
           style={[styles.sortButton, sortMode === 'song' && styles.sortButtonActive]}
           onPress={() => setSortMode('song')}
         >
-          <Text style={[styles.sortButtonText, sortMode === 'song' && styles.sortButtonTextActive]}>按歌曲</Text>
+          <Text style={[styles.sortButtonText, sortMode === 'song' && styles.sortButtonTextActive]}>According to Song</Text>
         </TouchableOpacity>
         <TouchableOpacity 
           style={[styles.sortButton, sortMode === 'created' && styles.sortButtonActive]}
           onPress={() => setSortMode('created')}
         >
-          <Text style={[styles.sortButtonText, sortMode === 'created' && styles.sortButtonTextActive]}>最新</Text>
+          <Text style={[styles.sortButtonText, sortMode === 'created' && styles.sortButtonTextActive]}>Latest</Text>
         </TouchableOpacity>
       </View>
 
@@ -457,12 +633,29 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
       ) : (
         <View style={styles.wordListContainer}>
           <FlatList
+            ref={flatListRef}
             data={sortedWords}
             keyExtractor={(item) => item.id}
             renderItem={renderWordItem}
-            contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
+            onScrollToIndexFailed={(info) => {
+              setTimeout(() => {
+                flatListRef.current?.scrollToIndex({ index: info.index, animated: true });
+              }, 100);
+            }}
           />
+          
+          <View style={styles.indexBar}>
+            {alphabet.map((letter) => (
+              <TouchableOpacity
+                key={letter}
+                style={styles.indexItem}
+                onPress={() => getWordIndex(letter)}
+              >
+                <Text style={styles.indexText}>{letter}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       )}
 
@@ -487,21 +680,22 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
                 </View>
 
                 <View style={styles.modalBody}>
-                  <Text style={styles.modalMeaning}>{selectedWord.meaning}</Text>
-                  
-                  <View style={styles.exampleSection}>
-                    <Text style={styles.sectionLabel}>Example:</Text>
-                    <Text style={styles.exampleText}>"{selectedWord.example}"</Text>
-                    {(selectedWord as any).exampleZh && (
-                      <Text style={styles.exampleZhText}>{(selectedWord as any).exampleZh}</Text>
-                    )}
-                  </View>
+                  <ScrollView showsVerticalScrollIndicator={true}>
+                    <Text style={styles.modalMeaning}>{selectedWord.meaning}</Text>
+                    
+                    <View style={styles.exampleSection}>
+                      <Text style={styles.sectionLabel}>Example:</Text>
+                      <Text style={styles.exampleText}>"{selectedWord.example}"</Text>
+                      {(selectedWord as any).exampleZh && (
+                        <Text style={styles.exampleZhText}>{(selectedWord as any).exampleZh}</Text>
+                      )}
+                    </View>
 
-                  <View style={styles.sourcesSection}>
-                    <Text style={styles.sectionLabel}>
-                      Sources ({getSourcesForWord(selectedWord.id).length}):
-                    </Text>
-                    <FlatList
+                    <View style={styles.sourcesSection}>
+                      <Text style={styles.sectionLabel}>
+                        Sources ({getSourcesForWord(selectedWord.id).length}):
+                      </Text>
+                      <FlatList
                       data={getSourcesForWord(selectedWord.id)}
                       horizontal
                       showsHorizontalScrollIndicator={false}
@@ -510,6 +704,7 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
                       contentContainerStyle={styles.sourcesList}
                     />
                   </View>
+                  </ScrollView>
                 </View>
 
                 <View style={styles.buttonRow}>
@@ -518,18 +713,15 @@ export const TreasuryScreen: React.FC<TreasuryScreenProps> = ({ navigation }) =>
                       styles.masteredButton,
                       selectedWord.isMastered && styles.masteredButtonActive,
                     ]}
-                    onPress={toggleMastered}
+                    onPress={() => toggleMasteredForWord(selectedWord.id)}
+                    activeOpacity={0.7}
                   >
-                    <Text style={styles.masteredButtonText}>
+                    <Text style={[
+                      styles.masteredButtonText,
+                      selectedWord.isMastered && styles.masteredButtonTextActive
+                    ]}>
                       {selectedWord.isMastered ? '✓ Mastered' : 'Mark as Mastered'}
                     </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.deleteButton}
-                    onPress={handleDeleteWord}
-                  >
-                    <Text style={styles.deleteButtonText}>🗑️ Delete</Text>
                   </TouchableOpacity>
                 </View>
               </>
@@ -603,9 +795,28 @@ const styles = StyleSheet.create({
   },
   wordListContainer: {
     flex: 1,
+    flexDirection: 'row',
   },
   wordList: {
     flex: 1,
+  },
+  indexBar: {
+    width: 30,
+    backgroundColor: COLORS.surfaceLight,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 15,
+    marginRight: 4,
+    justifyContent: 'center',
+  },
+  indexItem: {
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  indexText: {
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
   },
   wordCard: {
     backgroundColor: COLORS.surface,
@@ -616,6 +827,47 @@ const styles = StyleSheet.create({
   wordCardSelected: {
     borderWidth: 2,
     borderColor: COLORS.primary,
+  },
+  wordCardButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  masterButton: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    padding: 10,
+    borderRadius: 8,
+    marginRight: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  masterButtonActive: {
+    backgroundColor: COLORS.primary,
+  },
+  masterButtonText: {
+    color: COLORS.primary,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  deleteButton: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    padding: 10,
+    borderRadius: 8,
+    marginLeft: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F44336',
+  },
+  deleteButtonText: {
+    color: '#F44336',
+    fontWeight: '600',
+    fontSize: 14,
   },
   checkbox: {
     position: 'absolute',
@@ -716,6 +968,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
+    flex: 1,
     maxHeight: '80%',
   },
   modalHeader: {
@@ -742,6 +995,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   modalBody: {
+    flex: 1,
     marginBottom: 20,
   },
   modalMeaning: {
@@ -815,6 +1069,9 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 16,
     fontWeight: '600',
+  },
+  masteredButtonTextActive: {
+    color: '#fff',
   },
   deleteButton: {
     backgroundColor: COLORS.error,

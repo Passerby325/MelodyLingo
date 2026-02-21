@@ -25,10 +25,12 @@ interface Challenge {
   sentence: string;
   sentenceEn: string;
   sentenceEnWithBlank: string;
+  sentenceOriginal: string;
   correctAnswer: string;
   options: string[];
   selectedAnswer?: string;
   songTitle: string;
+  replaceWord: string;
 }
 
 export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
@@ -65,12 +67,13 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
   }, [sortedSongs, searchQuery]);
 
   const availableWords = useMemo(() => {
+    let filtered = words.filter(w => !w.isMastered);
     if (mode === 'single' && selectedSong) {
       const songSources = sources.filter(s => s.songTitle === selectedSong.title);
       const wordIds = [...new Set(songSources.map(s => s.wordId))];
-      return words.filter(w => wordIds.includes(w.id));
+      filtered = filtered.filter(w => wordIds.includes(w.id));
     }
-    return words;
+    return filtered;
   }, [mode, selectedSong, words, sources]);
 
   const goToSongSelect = () => {
@@ -114,9 +117,11 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
         sentence: sentenceWithBlank,
         sentenceEn: sentenceEnWithBlank,
         sentenceEnWithBlank: sentenceEnWithBlank,
+        sentenceOriginal: sentenceRaw,
         correctAnswer: word.word,
         options,
         songTitle: source?.songTitle || '',
+        replaceWord: replaceWordStr,
       };
     });
 
@@ -164,10 +169,13 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
             feedback: result.feedback,
             songTitle: currentChallenge.songTitle,
             createdAt: Date.now(),
+            errorType: 'fill',
           });
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Evaluation error:', error);
+        const errorMessage = error?.message || error?.toString() || 'Unknown error';
+        Alert.alert('API请求失败', `评估出错: ${errorMessage}`);
         const isCorrect = userInput.trim().toLowerCase() === currentChallenge.correctAnswer.toLowerCase();
         setSelectedAnswer(isCorrect ? 'correct' : 'wrong');
         if (isCorrect) {
@@ -186,6 +194,7 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
             feedback: 'Evaluation failed',
             songTitle: currentChallenge.songTitle,
             createdAt: Date.now(),
+            errorType: 'fill',
           });
         }
       } finally {
@@ -221,6 +230,7 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
         feedback: 'Wrong answer selected',
         songTitle: currentChallenge.songTitle,
         createdAt: Date.now(),
+        errorType: '4choice',
       });
     }
   };
@@ -252,7 +262,7 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
       case 0:
         return '';
       case 1:
-        return word.meaning;
+        return challenges[currentIndex].replaceWord;
       case 2:
         return word.word.charAt(0).toUpperCase() + '...';
       default:
@@ -275,20 +285,6 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
             <Text style={styles.title}>The Arena</Text>
             <Text style={styles.subtitle}>Configure your challenge</Text>
           </View>
-          <View style={styles.headerButtons}>
-            <TouchableOpacity 
-              style={styles.historyButton}
-              onPress={() => navigation.navigate('Review')}
-            >
-              <Text style={styles.historyButtonText}>📝 Review</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.historyButton}
-              onPress={() => navigation.navigate('History')}
-            >
-              <Text style={styles.historyButtonText}>📜 Songs</Text>
-            </TouchableOpacity>
-          </View>
         </View>
 
         <View style={styles.section}>
@@ -299,7 +295,7 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
               onPress={() => setChallengeMode('4choice')}
             >
               <Text style={[styles.modeButtonText, challengeMode === '4choice' && styles.modeButtonTextActive]}>
-                4选1
+                MCQ
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -307,7 +303,7 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
               onPress={() => setChallengeMode('fill')}
             >
               <Text style={[styles.modeButtonText, challengeMode === 'fill' && styles.modeButtonTextActive]}>
-                自己写
+                Fill in
               </Text>
             </TouchableOpacity>
           </View>
@@ -497,6 +493,25 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
               <Text style={styles.correctAnswerText}>
                 Correct answer: {currentChallenge.correctAnswer}
               </Text>
+              <Text style={styles.correctAnswerText}>
+                正确答案: {currentChallenge.correctAnswer}
+              </Text>
+              <Text style={styles.fullHintText}>
+                原文: {currentChallenge.sentenceOriginal}
+              </Text>
+            </View>
+          )}
+          {selectedAnswer === 'correct' && (
+            <View style={styles.correctAnswerContainer}>
+              <Text style={[styles.correctAnswerText, { color: COLORS.success }]}>
+                Correct! ✓
+              </Text>
+              <Text style={styles.correctAnswerText}>
+                正确答案: {currentChallenge.correctAnswer}
+              </Text>
+              <Text style={styles.fullHintText}>
+                原文: {currentChallenge.sentenceOriginal}
+              </Text>
             </View>
           )}
         </View>
@@ -534,11 +549,12 @@ export const ArenaScreen: React.FC<ArenaScreenProps> = ({ navigation }) => {
                 <Text style={styles.evaluationScore}>Score: {evaluationResult.score}/100</Text>
                 <Text style={styles.evaluationFeedback}>{evaluationResult.feedback}</Text>
               </View>
-              {selectedAnswer === 'wrong' && (
-                <Text style={styles.correctAnswerText}>
-                  Correct answer: {currentChallenge.correctAnswer}
-                </Text>
-              )}
+              <Text style={styles.correctAnswerText}>
+                正确答案: {currentChallenge.correctAnswer}
+              </Text>
+              <Text style={styles.fullHintText}>
+                原文: {currentChallenge.sentenceOriginal}
+              </Text>
             </>
           )}
         </View>

@@ -17,7 +17,7 @@ interface ControlScreenProps {
 }
 
 export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
-  const { blacklist, addToBlacklist, removeFromBlacklist, stats, words, settings, updateSettings } = useAppStore();
+  const { blacklist, addToBlacklist, removeFromBlacklist, stats, words, settings, updateSettings, clearAllData } = useAppStore();
   const [newBlacklistWord, setNewBlacklistWord] = useState('');
   const [tempGeminiKey, setTempGeminiKey] = useState(settings.geminiApiKey);
   const [tempNvidiaKey, setTempNvidiaKey] = useState(settings.nvidiaApiKey);
@@ -310,6 +310,35 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({ navigation }) => {
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>🗑️ Clear All Data</Text>
+        <Text style={styles.sectionDescription}>
+          This will delete all words, sources, songs, and wrong answers. This action cannot be undone.
+        </Text>
+        <TouchableOpacity 
+          style={styles.dangerButton} 
+          onPress={() => {
+            Alert.alert(
+              'Clear All Data',
+              'Are you sure you want to delete all data? This cannot be undone.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                  text: 'Delete All', 
+                  style: 'destructive', 
+                  onPress: async () => {
+                    await clearAllData();
+                    Alert.alert('Success', 'All data has been cleared');
+                  }
+                },
+              ]
+            );
+          }}
+        >
+          <Text style={styles.dangerButtonText}>🗑️ Clear All Data</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>ℹ️ About</Text>
         <View style={styles.aboutCard}>
           <Text style={styles.appName}>MelodyLingo</Text>
@@ -511,6 +540,18 @@ const styles = StyleSheet.create({
   },
   saveButtonText: {
     color: COLORS.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  dangerButton: {
+    backgroundColor: '#F44336',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  dangerButtonText: {
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },

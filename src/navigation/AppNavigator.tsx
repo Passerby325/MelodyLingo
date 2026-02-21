@@ -11,16 +11,20 @@ import {
   ControlScreen,
   HistoryScreen,
   ReviewScreen,
+  OthersScreen,
+  PracticeScreen,
 } from '../screens';
 
 const Tab = createBottomTabNavigator();
-const Stack = createStackNavigator();
+const OthersStack = createStackNavigator();
+const MainStack = createStackNavigator();
 
 const TabIcon = ({ name, focused }: { name: string; focused: boolean }) => {
   const icons: Record<string, string> = {
     Factory: '🏭',
     Arena: '⚔️',
     Treasury: '💎',
+    Others: '📚',
     Control: '⚙️',
   };
 
@@ -30,6 +34,17 @@ const TabIcon = ({ name, focused }: { name: string; focused: boolean }) => {
         {icons[name]}
       </Text>
     </View>
+  );
+};
+
+const OthersStackScreen = () => {
+  return (
+    <OthersStack.Navigator screenOptions={{ headerShown: false }}>
+      <OthersStack.Screen name="OthersMain" component={OthersScreen} />
+      <OthersStack.Screen name="History" component={HistoryScreen} />
+      <OthersStack.Screen name="Review" component={ReviewScreen} />
+      <OthersStack.Screen name="Practice" component={PracticeScreen} />
+    </OthersStack.Navigator>
   );
 };
 
@@ -50,6 +65,7 @@ const TabNavigator = () => {
       <Tab.Screen name="Factory" component={FactoryScreen} />
       <Tab.Screen name="Arena" component={ArenaScreen} />
       <Tab.Screen name="Treasury" component={TreasuryScreen} />
+      <Tab.Screen name="Others" component={OthersStackScreen} />
       <Tab.Screen name="Control" component={ControlScreen} />
     </Tab.Navigator>
   );
@@ -58,11 +74,9 @@ const TabNavigator = () => {
 export const AppNavigator = () => {
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="MainTabs" component={TabNavigator} />
-        <Stack.Screen name="History" component={HistoryScreen} />
-        <Stack.Screen name="Review" component={ReviewScreen} />
-      </Stack.Navigator>
+      <MainStack.Navigator screenOptions={{ headerShown: false }}>
+        <MainStack.Screen name="MainTabs" component={TabNavigator} />
+      </MainStack.Navigator>
     </NavigationContainer>
   );
 };

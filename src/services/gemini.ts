@@ -34,14 +34,14 @@ RULES:
      - WRONG: "worse", "worst" / RIGHT: "bad"
    - SAME ROOT: If you extract "drag", do NOT extract "dragging", "dragged", "drags" - only keep the base form
 5. IMPORTANT - meaning must come from the lyric translation: Look at the Chinese translation of the lyric sentence, find the Chinese word/phrase that corresponds to the English word, and use THAT as the meaning. DO NOT use dictionary definitions - use the translation from the lyrics.
-6. IMPORTANT - if a word has multiple meanings, list ALL meanings separated by " / " (e.g., "永恒 / 永远")
+6. IMPORTANT - meaning format: Provide COMPLETE explanation, not just short translation. Format as "中文词:详细解释" (e.g., "永恒:指永恒的、没有终点的、持续到永远的性质或状态"). If multiple meanings, separate with " / " (e.g., "永恒:指永恒的、没有终点的 / 永远:指永远、持续到永恒")
 7. GRAMMAR MUST BE CORRECT:
    - English translation must be grammatically correct
    - Example sentences must be grammatically correct, complete English sentences
 8. For each word, provide:
    - word: the EXACT word from the English lyrics (lowercase, BASE FORM ONLY)
    - pos: Part of speech (noun, verb, adjective, or adverb)
-   - meaning: The Chinese translation from the lyric sentence (not dictionary definition). If multiple meanings exist, separate with " / "
+   - meaning: Detailed explanation in format "中文词:详细中文解释" (e.g., "永恒:指永恒的、没有终点的状态"). If multiple meanings exist, separate with " / "
    - level: CEFR level (B2, C1, or C2) - only if truly advanced word
    - sentence: The COMPLETE Chinese lyric sentence (keep original, NO blanks)
    - sentenceEn: The COMPLETE English translation (grammatically correct, NO blanks)
@@ -135,9 +135,10 @@ ${blacklistText}`;
       const words = JSON.parse(jsonMatch[0]);
       return { words: Array.isArray(words) ? words : [] };
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('AI API error:', error);
-    return { words: [] };
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    return { words: [], error: `API请求失败: ${errorMessage}` };
   }
 };
 
@@ -193,9 +194,10 @@ Translate each line/sentence accurately into English:`;
 
       return completion.choices[0]?.message?.content || '';
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Translation error:', error);
-    return '';
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    return { error: `API请求失败: ${errorMessage}` };
   }
 };
 
@@ -273,9 +275,10 @@ Respond with ONLY a JSON object in this exact format:
 
       return JSON.parse(jsonMatch[0]);
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Answer evaluation error:', error);
-    return { isCorrect: false, score: 0, feedback: '评估出错' };
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    return { isCorrect: false, score: 0, feedback: `评估出错: ${errorMessage}`, error: `API请求失败: ${errorMessage}` };
   }
 };
 
@@ -289,23 +292,25 @@ export const generatePracticeSentence = async (
   word: string,
   meaning: string,
   existingWords: string[],
-  settings?: UserSettings
+  settings?: UserSettings,
+  replaceWord?: string
 ): Promise<PracticeSentence> => {
   try {
     const otherWords = existingWords.filter(w => w.toLowerCase() !== word.toLowerCase());
     const shuffledOthers = otherWords.sort(() => Math.random() - 0.5).slice(0, 3);
     const options = [word, ...shuffledOthers].sort(() => Math.random() - 0.5);
 
+    const replaceWordStr = replaceWord || meaning.split('：')[0] || meaning.split(':')[0] || '';
     const prompt = `Create a practice sentence for the English word "${word}" (meaning: ${meaning}).
 
 Requirements:
 1. Create ONE natural English sentence using this word
-2. Replace the word with ____ in the sentence
+2. Return COMPLETE English sentence (NO blanks, NO placeholders)
 3. Provide the Chinese translation of the complete sentence
 4. The sentence should be different from any lyrics-based sentences
 
 Return ONLY valid JSON in this format:
-{"sentence": "The English sentence with ____", "sentenceZh": "Chinese translation"}`;
+{"sentence": "Complete English sentence", "sentenceZh": "Chinese translation"}`;
 
     if (!settings || settings.apiProvider === 'gemini') {
       const apiKey = settings?.geminiApiKey || '';
@@ -351,8 +356,170 @@ Return ONLY valid JSON in this format:
       const data = JSON.parse(jsonMatch[0]);
       return { ...data, options };
     }
-  } catch (error) {
+    } catch (error: any) {
     console.error('Generate practice sentence error:', error);
-    return { sentence: '____', sentenceZh: meaning, options: [] };
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    return { sentence: '____', sentenceZh: meaning, options: [], error: `API请求失败: ${errorMessage}` };
+  }
+};
+
+export interface TranslateQuestion {
+  word: string;
+  sentenceZh: string;
+}
+
+export const generateTranslateQuestion = async (
+  word: string,
+  meaning: string,
+  settings?: UserSettings
+): Promise<TranslateQuestion> => {
+  try {
+    const prompt = `Create a Chinese sentence translation practice for the English word "${word}" (meaning: ${meaning}).
+
+Requirements:
+1. Create ONE simple Chinese sentence using the word meaning
+2. The Chinese sentence should naturally include the meaning of "${word}"
+3. Return ONLY the Chinese sentence (user will translate it to English)
+
+Return ONLY valid JSON in this format:
+{"word": "${word}", "sentenceZh": "中文句子"}`;
+
+    if (!settings || settings.apiProvider === 'gemini') {
+      const apiKey = settings?.geminiApiKey || '';
+      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+
+      const genAI = createGeminiClient(apiKey);
+      const model = genAI.getGenerativeModel({ model: modelName });
+
+      const result = await model.generateContent(prompt);
+      const response = result.response.text();
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        return { word, sentenceZh: meaning };
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      return { word, sentenceZh: parsed.sentenceZh || parsed.sentence || meaning };
+    } else {
+      const apiKey = settings.nvidiaApiKey;
+      const modelName = settings.nvidiaModel || 'z-ai/glm5';
+
+      if (!apiKey) {
+        return { word, sentenceZh: meaning };
+      }
+
+      const client = createNvidiaClient(apiKey);
+
+      const completion = await client.chat.completions.create({
+        model: modelName,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 512,
+      });
+
+      const response = completion.choices[0]?.message?.content || '';
+
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        return { word, sentenceZh: meaning };
+      }
+
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (error: any) {
+    console.error('Generate translate question error:', error);
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    return { word, sentenceZh: meaning, error: `API请求失败: ${errorMessage}` };
+  }
+};
+
+export const evaluateTranslation = async (
+  userAnswer: string,
+  sentenceZh: string,
+  settings?: UserSettings
+): Promise<{ isCorrect: boolean; score: number; correctAnswer: string; feedback: string }> => {
+  try {
+    const prompt = `Evaluate if the user's English translation is correct for the Chinese sentence: "${sentenceZh}"
+
+User's answer: "${userAnswer}"
+
+Evaluate based on:
+1. Spelling correctness (consider minor typos - up to 1 character difference is acceptable)
+2. Semantic fit - does the translation convey the same meaning?
+
+Return your response in this exact format (no JSON):
+Score: [0-100]/100
+Your answer: "[user's answer]"
+Correct: "[correct full translation]"
+Reason: [具体原因]`;
+
+    if (!settings || settings.apiProvider === 'gemini') {
+      const apiKey = settings?.geminiApiKey || '';
+      const modelName = settings?.geminiModel || 'gemini-2.5-flash-lite';
+
+      const genAI = createGeminiClient(apiKey);
+      const model = genAI.getGenerativeModel({ model: modelName });
+
+      const result = await model.generateContent(prompt);
+      const response = result.response.text();
+
+      const parsed = parseTranslationResponse(response, userAnswer);
+      return parsed;
+    } else {
+      const apiKey = settings.nvidiaApiKey;
+      const modelName = settings.nvidiaModel || 'z-ai/glm5';
+
+      if (!apiKey) {
+        return { isCorrect: false, score: 0, correctAnswer: '', feedback: 'NVIDIA API key is missing' };
+      }
+
+      const client = createNvidiaClient(apiKey);
+
+      const completion = await client.chat.completions.create({
+        model: modelName,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 512,
+      });
+
+      const response = completion.choices[0]?.message?.content || '';
+
+      const parsed = parseTranslationResponse(response, userAnswer);
+      return parsed;
+    }
+  } catch (error: any) {
+    console.error('Translation evaluation error:', error);
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    return { isCorrect: false, score: 0, correctAnswer: '', feedback: `评估出错: ${errorMessage}`, error: `API请求失败: ${errorMessage}` };
+  }
+};
+
+const parseTranslationResponse = (
+  response: string,
+  userAnswer: string
+): { isCorrect: boolean; score: number; correctAnswer: string; feedback: string } => {
+  try {
+    const scoreMatch = response.match(/Score:\s*(\d+)\s*\/\s*100/i);
+    const correctMatch = response.match(/Correct:\s*"([^"]+)"/i);
+    const reasonMatch = response.match(/Reason:\s*(.+)/i);
+
+    const score = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
+    const correctAnswer = correctMatch ? correctMatch[1] : '';
+    const feedback = reasonMatch ? reasonMatch[1].trim() : '无法评估答案';
+
+    return {
+      isCorrect: score >= 70,
+      score,
+      correctAnswer,
+      feedback,
+    };
+  } catch (error) {
+    return {
+      isCorrect: false,
+      score: 0,
+      correctAnswer: '',
+      feedback: '无法解析评估结果',
+    };
   }
 };

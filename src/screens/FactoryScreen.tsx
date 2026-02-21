@@ -41,6 +41,23 @@ export const FactoryScreen: React.FC<FactoryScreenProps> = ({ navigation }) => {
     try {
       const blacklistWords = blacklist.map((b) => b.word);
       
+      const mergeShortLines = (lines: string[]): string[] => {
+        const result: string[] = [];
+        for (const line of lines) {
+          const chineseCharCount = line.replace(/[^\u4e00-\u9fa5]/g, '').length;
+          if (chineseCharCount < 6 && result.length > 0) {
+            result[result.length - 1] = result[result.length - 1] + ' ' + line;
+          } else {
+            result.push(line);
+          }
+        }
+        return result;
+      };
+      
+      const lines = lyrics.split('\n').filter(line => line.trim());
+      const mergedLines = mergeShortLines(lines);
+      const uniqueLyrics = [...new Set(mergedLines)].join('\n');
+      
       const allWords: Array<{ word: string; meaning: string; level: string; example: string; exampleZh: string; sentence: string; sentenceEn: string; replaceWord: string }> = [];
       let requestCount = 0;
       const maxRequests = 3;
@@ -51,7 +68,13 @@ export const FactoryScreen: React.FC<FactoryScreenProps> = ({ navigation }) => {
         setProgressPercent(10 + progressBase);
         setProgress(`AI is extracting words... (${requestCount}/${maxRequests})`);
         
-        const result = await extractVocabulary(lyrics, songTitle, blacklistWords, settings);
+        const result = await extractVocabulary(uniqueLyrics, songTitle, blacklistWords, settings);
+        
+        if (result.error) {
+          Alert.alert('API请求失败', result.error);
+          setIsExtracting(false);
+          return;
+        }
         
         if (result.words.length === 0) {
           break;
@@ -98,18 +121,25 @@ export const FactoryScreen: React.FC<FactoryScreenProps> = ({ navigation }) => {
         );
 
         if (existingWord) {
-          const newSource: Source = {
-            id: Date.now().toString() + Math.random(),
-            wordId: existingWord.id,
-            songTitle: songTitle,
-            artist: '',
-            lyricSentence: vocabWord.sentence || '',
-            lyricSentenceEn: vocabWord.sentenceEn || '',
-            lyricTranslated: vocabWord.meaning,
-            replaceWord: vocabWord.replaceWord || '',
-          };
-          existingSources.push(newSource);
-          addSource(newSource);
+          const isSourceDuplicate = existingSources.some(
+            (s) => s.wordId === existingWord.id && 
+                   s.lyricSentence === vocabWord.sentence
+          );
+          
+          if (!isSourceDuplicate) {
+            const newSource: Source = {
+              id: Date.now().toString() + Math.random(),
+              wordId: existingWord.id,
+              songTitle: songTitle,
+              artist: '',
+              lyricSentence: vocabWord.sentence || '',
+              lyricSentenceEn: vocabWord.sentenceEn || '',
+              lyricTranslated: vocabWord.meaning,
+              replaceWord: vocabWord.replaceWord || '',
+            };
+            existingSources.push(newSource);
+            addSource(newSource);
+          }
         } else {
           const wordId = Date.now().toString() + Math.random();
           const wordLevel = vocabWord.level || 'B2';
@@ -173,12 +203,6 @@ export const FactoryScreen: React.FC<FactoryScreenProps> = ({ navigation }) => {
           <Text style={styles.title}>The Factory</Text>
           <Text style={styles.subtitle}>Import your favorite song</Text>
         </View>
-        <TouchableOpacity 
-          style={styles.historyButton}
-          onPress={() => navigation.navigate('History')}
-        >
-          <Text style={styles.historyButtonText}>📜 History</Text>
-        </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
 

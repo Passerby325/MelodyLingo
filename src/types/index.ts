@@ -55,6 +55,7 @@ export interface WrongAnswer {
   feedback: string;
   songTitle: string;
   createdAt: number;
+  errorType: '4choice' | 'fill' | 'translate';
 }
 
 export interface ProcessResult {

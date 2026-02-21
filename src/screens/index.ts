@@ -4,3 +4,5 @@ export { TreasuryScreen } from './TreasuryScreen';
 export { ControlScreen } from './ControlScreen';
 export { HistoryScreen } from './HistoryScreen';
 export { ReviewScreen } from './ReviewScreen';
+export { OthersScreen } from './OthersScreen';
+export { PracticeScreen } from './PracticeScreen';

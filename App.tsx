@@ -6,24 +6,10 @@ import { useAppStore } from './src/store';
 import { StorageService } from './src/services/storage';
 
 export default function App() {
-  const { loadData, addWord, addSource, addSong } = useAppStore();
+  const { loadData } = useAppStore();
 
   useEffect(() => {
-    const initializeApp = async () => {
-      await loadData();
-
-      const [words, sources, songs] = await Promise.all([
-        StorageService.getWords(),
-        StorageService.getSources(),
-        StorageService.getSongs(),
-      ]);
-
-      words.forEach((w) => addWord(w));
-      sources.forEach((s) => addSource(s));
-      songs.forEach((s) => addSong(s));
-    };
-
-    initializeApp();
+    loadData();
   }, []);
 
   return (

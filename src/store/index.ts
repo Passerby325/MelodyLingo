@@ -3,6 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Word, Source, Song, BlacklistItem, UserStats, UserSettings, DEFAULT_SETTINGS, WrongAnswer } from '../types';
 
 const STATS_KEY = '@melody_stats';
+const WORDS_KEY = '@melody_words';
+const SOURCES_KEY = '@melody_sources';
+const SONGS_KEY = '@melody_songs';
 const BLACKLIST_KEY = '@melody_blacklist';
 const SETTINGS_KEY = '@melody_settings';
 const WRONG_ANSWERS_KEY = '@melody_wrong_answers';
@@ -30,6 +33,7 @@ interface AppState {
   updateStats: (total: number, mastered: number) => void;
   getSourcesForWord: (wordId: string) => Source[];
   updateSettings: (updates: Partial<UserSettings>) => Promise<void>;
+  clearAllData: () => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -47,15 +51,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoading: true,
 
-  addWord: (word) => set((state) => ({ words: [...state.words, word] })),
+  addWord: (word) => set((state) => {
+    const newWords = [...state.words, word];
+    AsyncStorage.setItem(WORDS_KEY, JSON.stringify(newWords));
+    return { words: newWords };
+  }),
 
-  addSource: (source) => set((state) => ({ sources: [...state.sources, source] })),
+  addSource: (source) => set((state) => {
+    const newSources = [...state.sources, source];
+    AsyncStorage.setItem(SOURCES_KEY, JSON.stringify(newSources));
+    return { sources: newSources };
+  }),
 
-  addSong: (song) => set((state) => ({ songs: [...state.songs, song] })),
+  addSong: (song) => set((state) => {
+    const newSongs = [...state.songs, song];
+    AsyncStorage.setItem(SONGS_KEY, JSON.stringify(newSongs));
+    return { songs: newSongs };
+  }),
 
-  updateWord: (id, updates) => set((state) => ({
-    words: state.words.map((w) => (w.id === id ? { ...w, ...updates } : w)),
-  })),
+  updateWord: async (id, updates) => {
+    const newWords = get().words.map((w) => (w.id === id ? { ...w, ...updates } : w));
+    set({ words: newWords });
+    await AsyncStorage.setItem(WORDS_KEY, JSON.stringify(newWords));
+  },
 
   addToBlacklist: async (word) => {
     const newItem: BlacklistItem = {
@@ -92,8 +110,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadData: async () => {
     try {
-      const [statsData, blacklistData, settingsData, wrongAnswersData] = await Promise.all([
+      const [statsData, wordsData, sourcesData, songsData, blacklistData, settingsData, wrongAnswersData] = await Promise.all([
         AsyncStorage.getItem(STATS_KEY),
+        AsyncStorage.getItem(WORDS_KEY),
+        AsyncStorage.getItem(SOURCES_KEY),
+        AsyncStorage.getItem(SONGS_KEY),
         AsyncStorage.getItem(BLACKLIST_KEY),
         AsyncStorage.getItem(SETTINGS_KEY),
         AsyncStorage.getItem(WRONG_ANSWERS_KEY),
@@ -101,6 +122,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({
         stats: statsData ? JSON.parse(statsData) : get().stats,
+        words: wordsData ? JSON.parse(wordsData) : [],
+        sources: sourcesData ? JSON.parse(sourcesData) : [],
+        songs: songsData ? JSON.parse(songsData) : [],
         blacklist: blacklistData ? JSON.parse(blacklistData) : [],
         wrongAnswers: wrongAnswersData ? JSON.parse(wrongAnswersData) : [],
         settings: settingsData ? { ...DEFAULT_SETTINGS, ...JSON.parse(settingsData) } : DEFAULT_SETTINGS,
@@ -124,5 +148,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newSettings = { ...get().settings, ...updates };
     set({ settings: newSettings });
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(newSettings));
+  },
+
+  clearAllData: async () => {
+    await AsyncStorage.multiRemove([
+      WORDS_KEY,
+      SOURCES_KEY,
+      SONGS_KEY,
+      WRONG_ANSWERS_KEY,
+      STATS_KEY,
+    ]);
+    set({
+      words: [],
+      sources: [],
+      songs: [],
+      wrongAnswers: [],
+      stats: {
+        totalWords: 0,
+        masteredWords: 0,
+        streakDays: 0,
+        lastPracticeDate: null,
+      },
+    });
   },
 }));
